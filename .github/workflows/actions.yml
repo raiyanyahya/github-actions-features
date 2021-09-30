@@ -1,0 +1,143 @@
+
+name: push-to-codeartifact
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  version: ${{ github.run_number }}
+  component: ${{github.repository}}
+  
+jobs:
+  Build:
+    name: Building package on ${{ matrix.operating-system }}
+    runs-on: ${{ matrix.operating-system }}
+    strategy:
+      matrix:
+        operating-system: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v2 
+      - name: setup python
+        uses: actions/setup-python@v2
+        with:
+            python-version: 3.7
+      - name: build
+        run: python3 setup.py install
+
+  Test:
+      name: Running test on ${{ matrix.operating-system }}
+      needs: [Build, Pylint, SonarScan, MyPy]
+      runs-on: ${{ matrix.operating-system }}
+      strategy:
+        matrix:
+          operating-system: [ubuntu-latest, windows-latest, macos-latest]
+      steps:
+        - uses: actions/checkout@v2
+        - name: setup python
+          uses: actions/setup-python@v2
+          with:
+            python-version: 3.7
+        - name: test
+          run: |
+            pip install tox
+            tox -r
+  
+  DockerBuild:
+    name: Build Docker Image
+    needs: [Build]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build my docker image
+      run: docker build .	          
+  DockerRun:
+    name: Run Docker Image
+    needs: [DockerBuild]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run my docker image
+      run: docker run hello-world
+  DockerPush:
+    name: Push Docker Image
+    needs: [DockerRun]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Push to ecr"
+      
+  Release:
+    name: Push to CodeArtifact
+    needs: [Test, ExportArtifact]
+    runs-on: ubuntu-latest
+    if: |
+        contains(github.event.head_commit.message, '[release]') == true &&
+        github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v2
+      - name: setup python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.7
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install setuptools wheel twine
+      - name: Build and publish
+        env:
+          TWINE_USERNAME: aws
+          TWINE_PASSWORD: ${{ secrets.CODEARTIFACT_AUTH_TOKEN }}
+          TWINE_REPOSITORY_URL: ${{ secrets.CODEARTIFACT_LAB_REPO_URL }}
+        run: |
+          python3 setup.py sdist bdist_wheel
+          twine upload dist/*
+  
+  ExportArtifact:
+    name: Export Build Artifacts
+    needs: [Build]
+    environment: Prod
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Create dist package
+        run: python3 setup.py sdist bdist_wheel
+      - name: Archive production artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: python-dist-package
+          path: |
+                dist
+  VersionInfo:
+    name: Building Version ${{ github.run_number }}
+    runs-on: ubuntu-latest
+    outputs:
+      output1: ${{ steps.step1.outputs.test }}
+    steps:
+      - id: step1
+        run: |
+            version="${{ github.run_number }}"
+            echo "::set-output name=test::$version"
+  ComponentName:
+    name: Component name ${{ github.event.repository.name }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo $version 
+
+  Pylint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: pip install pylint
+      - run: pylint --version
+  MyPy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: pip install mypy
+      - run: mypy --version
+  SonarScan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: echo "Running Sonar Scan"
+  
+
