@@ -1,5 +1,5 @@
 
-name: push-to-codeartifact
+name: features
 on:
   push:
     branches: [ master ]
